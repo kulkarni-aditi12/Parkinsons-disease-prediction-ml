@@ -187,9 +187,11 @@ html, body, [class*="css"] {
 </style>
 """, unsafe_allow_html=True)
 
+
 @st.cache_data
 def load_data():
     return pd.read_csv("parkinsons.data")
+
 
 @st.cache_resource
 def train_model():
@@ -202,176 +204,271 @@ def train_model():
     )
 
     model = RandomForestClassifier(
-        n_estimators=300,
-        max_depth=8,
+        n_estimators=400,
+        max_depth=10,
         min_samples_split=4,
         min_samples_leaf=2,
+        class_weight="balanced",
         random_state=42
     )
     model.fit(X_train, y_train)
     return model
 
+
+@st.cache_data
+def get_reference_profiles():
+    data = load_data()
+    feature_cols = [col for col in data.columns if col not in ["name", "status"]]
+
+    healthy = data[data["status"] == 0][feature_cols]
+    parkinsons = data[data["status"] == 1][feature_cols]
+
+    healthy_median = healthy.median()
+    parkinsons_median = parkinsons.median()
+    q05 = data[feature_cols].quantile(0.05)
+    q95 = data[feature_cols].quantile(0.95)
+
+    return feature_cols, healthy_median, parkinsons_median, q05, q95
+
+
 def convert_to_model_input(age, gender, voice, speech, tremor, movement, stiffness, balance):
-    sample = {
-        "MDVP:Fo(Hz)": 200.0,
-        "MDVP:Fhi(Hz)": 215.0,
-        "MDVP:Flo(Hz)": 190.0,
-        "MDVP:Jitter(%)": 0.0022,
-        "MDVP:Jitter(Abs)": 0.000010,
-        "MDVP:RAP": 0.0011,
-        "MDVP:PPQ": 0.0013,
-        "Jitter:DDP": 0.0033,
-        "MDVP:Shimmer": 0.011,
-        "MDVP:Shimmer(dB)": 0.10,
-        "Shimmer:APQ3": 0.0055,
-        "Shimmer:APQ5": 0.0068,
-        "MDVP:APQ": 0.0085,
-        "Shimmer:DDA": 0.0165,
-        "NHR": 0.0025,
-        "HNR": 29.0,
-        "RPDE": 0.40,
-        "DFA": 0.72,
-        "spread1": -7.1,
-        "spread2": 0.17,
-        "D2": 2.0,
-        "PPE": 0.09,
-    }
+    feature_cols, healthy_med, pd_med, q05, q95 = get_reference_profiles()
 
     reasons = []
 
-    if age >= 60:
-        sample["MDVP:Jitter(%)"] *= 1.08
-        sample["MDVP:Shimmer"] *= 1.08
-        sample["HNR"] -= 0.8
-        reasons.append("higher age")
+    # Build symptom score in a controlled way
+    symptom_score = 0.0
 
-    if gender == "Female":
-        sample["MDVP:Fo(Hz)"] = 220.0
-        sample["MDVP:Fhi(Hz)"] = 235.0
-        sample["MDVP:Flo(Hz)"] = 205.0
+    age_score = 0.0
+    if age >= 70:
+        age_score = 1.5
+        reasons.append("higher age")
+    elif age >= 60:
+        age_score = 1.0
+        reasons.append("higher age")
+    elif age >= 50:
+        age_score = 0.5
+
+    voice_map = {
+        "Normal": 0.0,
+        "Slightly Shaky": 2.0,
+        "Very Shaky": 3.6
+    }
+    speech_map = {
+        "Clear": 0.0,
+        "Slightly Unclear": 1.5,
+        "Unclear / Slurred": 3.0
+    }
+    tremor_map = {
+        "No": 0.0,
+        "Sometimes": 1.2,
+        "Frequent": 2.4
+    }
+    movement_map = {
+        "Normal": 0.0,
+        "Slow": 1.2,
+        "Very Slow": 2.2
+    }
+    stiffness_map = {
+        "No": 0.0,
+        "Mild": 1.0,
+        "Severe": 2.0
+    }
+    balance_map = {
+        "Normal": 0.0,
+        "Sometimes Unstable": 1.1,
+        "Frequently Unstable": 2.1
+    }
+
+    symptom_score += age_score
+    symptom_score += voice_map[voice]
+    symptom_score += speech_map[speech]
+    symptom_score += tremor_map[tremor]
+    symptom_score += movement_map[movement]
+    symptom_score += stiffness_map[stiffness]
+    symptom_score += balance_map[balance]
 
     if voice == "Slightly Shaky":
-        sample["MDVP:Jitter(%)"] = 0.0060
-        sample["MDVP:Jitter(Abs)"] = 0.000050
-        sample["MDVP:RAP"] = 0.0030
-        sample["MDVP:PPQ"] = 0.0035
-        sample["Jitter:DDP"] = 0.0090
-        sample["MDVP:Shimmer"] = 0.028
-        sample["MDVP:Shimmer(dB)"] = 0.26
-        sample["Shimmer:APQ3"] = 0.014
-        sample["Shimmer:APQ5"] = 0.017
-        sample["MDVP:APQ"] = 0.022
-        sample["Shimmer:DDA"] = 0.042
-        sample["NHR"] = 0.010
-        sample["HNR"] = 22.0
-        sample["RPDE"] = 0.52
-        sample["PPE"] = 0.22
         reasons.append("slightly shaky voice")
-
     elif voice == "Very Shaky":
-        sample["MDVP:Jitter(%)"] = 0.015
-        sample["MDVP:Jitter(Abs)"] = 0.000120
-        sample["MDVP:RAP"] = 0.0080
-        sample["MDVP:PPQ"] = 0.0075
-        sample["Jitter:DDP"] = 0.024
-        sample["MDVP:Shimmer"] = 0.060
-        sample["MDVP:Shimmer(dB)"] = 0.58
-        sample["Shimmer:APQ3"] = 0.032
-        sample["Shimmer:APQ5"] = 0.038
-        sample["MDVP:APQ"] = 0.048
-        sample["Shimmer:DDA"] = 0.096
-        sample["NHR"] = 0.040
-        sample["HNR"] = 15.0
-        sample["RPDE"] = 0.60
-        sample["DFA"] = 0.78
-        sample["spread1"] = -5.2
-        sample["spread2"] = 0.30
-        sample["D2"] = 2.8
-        sample["PPE"] = 0.33
         reasons.append("very shaky voice")
 
     if speech == "Slightly Unclear":
-        sample["HNR"] -= 2.0
-        sample["NHR"] += 0.004
-        sample["RPDE"] += 0.03
-        sample["PPE"] += 0.03
         reasons.append("slightly unclear speech")
-
     elif speech == "Unclear / Slurred":
-        sample["HNR"] -= 5.0
-        sample["NHR"] += 0.012
-        sample["RPDE"] += 0.07
-        sample["DFA"] += 0.03
-        sample["spread1"] += 0.8
-        sample["PPE"] += 0.08
         reasons.append("unclear or slurred speech")
 
-    severity_score = 0
-
     if tremor == "Sometimes":
-        severity_score += 1
         reasons.append("occasional tremor")
     elif tremor == "Frequent":
-        severity_score += 2
         reasons.append("frequent tremor")
 
     if movement == "Slow":
-        severity_score += 1
         reasons.append("slow movement")
     elif movement == "Very Slow":
-        severity_score += 2
         reasons.append("very slow movement")
 
     if stiffness == "Mild":
-        severity_score += 1
         reasons.append("mild stiffness")
     elif stiffness == "Severe":
-        severity_score += 2
         reasons.append("severe stiffness")
 
     if balance == "Sometimes Unstable":
-        severity_score += 1
         reasons.append("some balance difficulty")
     elif balance == "Frequently Unstable":
-        severity_score += 2
         reasons.append("frequent balance difficulty")
 
-    if severity_score == 1:
+    # Normalize symptom score
+    max_score = 16.8
+    severity_ratio = min(symptom_score / max_score, 1.0)
+
+    # Start from healthy median and move gradually toward Parkinson median
+    sample = healthy_med + (pd_med - healthy_med) * severity_ratio
+
+    # Controlled age effect
+    if age >= 60:
+        sample["MDVP:Jitter(%)"] *= 1.04
+        sample["MDVP:Shimmer"] *= 1.04
+        sample["NHR"] *= 1.03
+        sample["HNR"] *= 0.98
+    if age >= 70:
+        sample["MDVP:Jitter(%)"] *= 1.03
+        sample["MDVP:Shimmer"] *= 1.03
+        sample["PPE"] *= 1.04
+
+    # Controlled gender effect only on pitch-related features
+    if gender == "Female":
+        sample["MDVP:Fo(Hz)"] *= 1.08
+        sample["MDVP:Fhi(Hz)"] *= 1.06
+        sample["MDVP:Flo(Hz)"] *= 1.06
+
+    # Voice effect
+    if voice == "Slightly Shaky":
+        sample["MDVP:Jitter(%)"] *= 1.12
+        sample["MDVP:Jitter(Abs)"] *= 1.12
+        sample["MDVP:RAP"] *= 1.10
+        sample["MDVP:PPQ"] *= 1.10
+        sample["Jitter:DDP"] *= 1.10
+        sample["MDVP:Shimmer"] *= 1.10
+        sample["MDVP:Shimmer(dB)"] *= 1.08
+        sample["Shimmer:APQ3"] *= 1.08
+        sample["Shimmer:APQ5"] *= 1.08
+        sample["MDVP:APQ"] *= 1.08
+        sample["Shimmer:DDA"] *= 1.08
+        sample["NHR"] *= 1.06
+        sample["HNR"] *= 0.96
+        sample["PPE"] *= 1.08
+
+    elif voice == "Very Shaky":
+        sample["MDVP:Jitter(%)"] *= 1.25
+        sample["MDVP:Jitter(Abs)"] *= 1.20
+        sample["MDVP:RAP"] *= 1.18
+        sample["MDVP:PPQ"] *= 1.18
+        sample["Jitter:DDP"] *= 1.18
+        sample["MDVP:Shimmer"] *= 1.22
+        sample["MDVP:Shimmer(dB)"] *= 1.18
+        sample["Shimmer:APQ3"] *= 1.16
+        sample["Shimmer:APQ5"] *= 1.16
+        sample["MDVP:APQ"] *= 1.16
+        sample["Shimmer:DDA"] *= 1.16
+        sample["NHR"] *= 1.12
+        sample["HNR"] *= 0.90
+        sample["RPDE"] *= 1.08
+        sample["PPE"] *= 1.18
+
+    # Speech effect
+    if speech == "Slightly Unclear":
+        sample["HNR"] *= 0.96
+        sample["NHR"] *= 1.05
+        sample["RPDE"] *= 1.04
+        sample["PPE"] *= 1.05
+
+    elif speech == "Unclear / Slurred":
+        sample["HNR"] *= 0.90
+        sample["NHR"] *= 1.10
+        sample["RPDE"] *= 1.08
+        sample["DFA"] *= 1.03
+        sample["spread1"] *= 0.93 if sample["spread1"] < 0 else 1.07
+        sample["PPE"] *= 1.10
+
+    # Motor severity effect
+    motor_score = tremor_map[tremor] + movement_map[movement] + stiffness_map[stiffness] + balance_map[balance]
+
+    if motor_score >= 1.5:
+        sample["MDVP:Jitter(%)"] *= 1.03
+        sample["MDVP:Shimmer"] *= 1.03
+        sample["HNR"] *= 0.99
+
+    if motor_score >= 3.5:
         sample["MDVP:Jitter(%)"] *= 1.05
         sample["MDVP:Shimmer"] *= 1.05
-        sample["HNR"] -= 0.5
-    elif severity_score == 2:
-        sample["MDVP:Jitter(%)"] *= 1.10
-        sample["MDVP:Shimmer"] *= 1.10
-        sample["NHR"] += 0.001
-        sample["HNR"] -= 1.0
-        sample["PPE"] += 0.01
-    elif severity_score == 3:
-        sample["MDVP:Jitter(%)"] *= 1.18
-        sample["MDVP:Shimmer"] *= 1.18
-        sample["NHR"] += 0.002
-        sample["HNR"] -= 1.5
-        sample["RPDE"] += 0.02
-        sample["PPE"] += 0.02
-    elif severity_score >= 4:
-        sample["MDVP:Jitter(%)"] *= 1.30
-        sample["MDVP:Shimmer"] *= 1.30
-        sample["NHR"] += 0.004
-        sample["HNR"] -= 2.5
-        sample["RPDE"] += 0.04
-        sample["DFA"] += 0.02
-        sample["spread1"] += 0.5
-        sample["spread2"] += 0.02
-        sample["D2"] += 0.2
-        sample["PPE"] += 0.05
+        sample["NHR"] *= 1.04
+        sample["RPDE"] *= 1.03
+        sample["PPE"] *= 1.04
 
-    sample["MDVP:Jitter(%)"] = max(0.0015, min(sample["MDVP:Jitter(%)"], 0.035))
-    sample["MDVP:Shimmer"] = max(0.009, min(sample["MDVP:Shimmer"], 0.10))
-    sample["NHR"] = max(0.0005, min(sample["NHR"], 0.35))
-    sample["HNR"] = max(8.0, min(sample["HNR"], 35.0))
-    sample["PPE"] = max(0.04, min(sample["PPE"], 0.45))
+    if motor_score >= 5.5:
+        sample["MDVP:Jitter(%)"] *= 1.08
+        sample["MDVP:Shimmer"] *= 1.08
+        sample["NHR"] *= 1.06
+        sample["HNR"] *= 0.95
+        sample["RPDE"] *= 1.05
+        sample["DFA"] *= 1.02
+        sample["PPE"] *= 1.07
 
-    return pd.DataFrame([sample]), reasons
+    # Keep values realistic using dataset bounds
+    sample = sample.clip(lower=q05, upper=q95)
+
+    # Make sure order matches training columns
+    input_df = pd.DataFrame([sample])[feature_cols]
+
+    return input_df, reasons, symptom_score
+
+
+def compute_final_risk(model_prob, symptom_score, voice, speech, tremor, movement, stiffness, balance):
+    # Convert symptom score to 0-100 scale in a controlled way
+    symptom_risk = min((symptom_score / 16.8) * 100, 100)
+
+    # Blend model output with symptom score
+    final_risk = 0.72 * model_prob + 0.28 * symptom_risk
+
+    # Make clearly healthy cases stay low
+    if (
+        voice == "Normal"
+        and speech == "Clear"
+        and tremor == "No"
+        and movement == "Normal"
+        and stiffness == "No"
+        and balance == "Normal"
+    ):
+        final_risk = min(final_risk, 24)
+
+    # Gentle moderate shaping
+    mild_symptoms_count = sum([
+        voice == "Slightly Shaky",
+        speech == "Slightly Unclear",
+        tremor == "Sometimes",
+        movement == "Slow",
+        stiffness == "Mild",
+        balance == "Sometimes Unstable"
+    ])
+
+    severe_symptoms_count = sum([
+        voice == "Very Shaky",
+        speech == "Unclear / Slurred",
+        tremor == "Frequent",
+        movement == "Very Slow",
+        stiffness == "Severe",
+        balance == "Frequently Unstable"
+    ])
+
+    if severe_symptoms_count == 0 and mild_symptoms_count >= 2:
+        final_risk = min(max(final_risk, 42), 68)
+
+    if severe_symptoms_count >= 3:
+        final_risk = max(final_risk, 72)
+
+    return round(float(max(0, min(final_risk, 100))), 2)
+
 
 model = train_model()
 
@@ -403,10 +500,19 @@ with col2:
     st.markdown('</div>', unsafe_allow_html=True)
 
 if st.button("Predict Risk"):
-    input_df, reasons = convert_to_model_input(age, gender, voice, speech, tremor, movement, stiffness, balance)
-    prediction = model.predict(input_df)[0]
+    input_df, reasons, symptom_score = convert_to_model_input(
+        age, gender, voice, speech, tremor, movement, stiffness, balance
+    )
+
     probability = model.predict_proba(input_df)[0]
-    risk_score = probability[1] * 100
+    model_risk = probability[1] * 100
+
+    risk_score = compute_final_risk(
+        model_risk, symptom_score,
+        voice, speech, tremor, movement, stiffness, balance
+    )
+
+    prediction = 1 if risk_score >= 50 else 0
 
     st.markdown('<div class="section-heading">Prediction Result</div>', unsafe_allow_html=True)
 
@@ -447,7 +553,7 @@ Avoid delaying medical advice if symptoms increase
     else:
         st.error("""
 Consult a neurologist as soon as possible  
-Go for proper clinical and neurological evaluation   
+Go for proper clinical and neurological evaluation  
 Take family support and monitor movement, speech, and tremors carefully  
 """)
 
