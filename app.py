@@ -560,4 +560,4 @@ Take family support and monitor movement, speech, and tremors carefully
     with st.expander("Show values used for prediction"):
         preview_df = input_df.T
         preview_df.columns = ["Value"]
-        st.dataframe(preview_df, use_container_width=True)
+        st.dataframe(preview_df, width="stretch")
